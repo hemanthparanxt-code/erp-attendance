@@ -1,0 +1,265 @@
+(async () => {
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  let count = 0, skipped = 0;
+  const LIMIT = 100;
+
+  function isSubmitted() {
+    const text = document.body.innerText;
+
+    if (text.includes("No journal submitted yet")) return false;
+    if (text.includes("hasn't completed their reflective journal")) return false;
+
+    return true;
+  }
+
+  function getDuration() {
+    const text = document.body.innerText;
+
+    const m = text.match(/(\d+)\s*min/i);
+    const s = text.match(/(\d+)\s*sec/i);
+
+    let mins = 0;
+
+    if (m) mins += parseInt(m[1]);
+    if (s) mins += parseInt(s[1]) / 60;
+
+    return mins;
+  }
+
+  // MARKING RULES
+  // < 10 min  → 18
+  // 10–<20 min → 19
+  // ≥ 20 min   → 20
+  function getMarks(mins) {
+    if (mins < 10) return 18;
+    if (mins < 20) return 19;
+    return 20;
+  }
+
+  function distributeScores(total) {
+    const base = Math.floor(total / 5);
+    const rem = total % 5;
+
+    return Array.from(
+      { length: 5 },
+      (_, i) => Math.min(4, base + (i < rem ? 1 : 0))
+    );
+  }
+
+  async function waitForPage() {
+    for (let i = 0; i < 50; i++) {
+      if (document.body.innerText.length > 300) {
+        return true;
+      }
+
+      await sleep(300);
+    }
+
+    return false;
+  }
+
+  async function waitForRubric() {
+    for (let i = 0; i < 50; i++) {
+      const btns = Array.from(document.querySelectorAll("button"))
+        .filter(b => /^[0-4]$/.test(b.textContent.trim()));
+
+      if (btns.length >= 5) {
+        return true;
+      }
+
+      await sleep(300);
+    }
+
+    return false;
+  }
+
+  function isLastStudent() {
+    const btns = Array.from(document.querySelectorAll("button"))
+      .map(b => b.textContent.trim());
+
+    return !btns.some(t =>
+      /save\s*&?\s*next|next/i.test(t)
+    );
+  }
+
+  async function clickSave() {
+    await sleep(1500);
+
+    const btns = Array.from(document.querySelectorAll("button"));
+
+    const btn =
+      btns.find(
+        b =>
+          /save\s*&?\s*next/i.test(b.textContent.trim()) &&
+          !b.disabled
+      ) ||
+      btns.find(
+        b => /save\s*&?\s*next/i.test(b.textContent.trim())
+      ) ||
+      btns.find(
+        b =>
+          /next/i.test(b.textContent.trim()) &&
+          !b.disabled
+      ) ||
+      btns.find(
+        b =>
+          /save/i.test(b.textContent.trim()) &&
+          !b.disabled
+      ) ||
+      btns.find(
+        b => /save/i.test(b.textContent.trim())
+      );
+
+    if (btn) {
+      btn.removeAttribute("disabled");
+
+      btn.click();
+
+      await sleep(400);
+
+      btn.dispatchEvent(
+        new MouseEvent("click", {
+          bubbles: true
+        })
+      );
+
+      return true;
+    }
+
+    console.warn("⚠️ Save button not found!");
+
+    return false;
+  }
+
+  async function run() {
+    await waitForPage();
+    await sleep(1000);
+
+    const last = isLastStudent();
+    const total = count + skipped + 1;
+
+    // Check journal submission
+    if (!isSubmitted()) {
+      console.log(
+        `⏭️ [${total}] No journal submitted — Skipped`
+      );
+
+      skipped++;
+
+      await clickSave();
+
+      return !last;
+    }
+
+    // Wait for rubric
+    const rubricReady = await waitForRubric();
+
+    if (!rubricReady) {
+      console.warn(
+        `⚠️ [${total}] Rubric not found — Skipped`
+      );
+
+      skipped++;
+
+      await clickSave();
+
+      return !last;
+    }
+
+    // Get duration and marks
+    const mins = getDuration();
+    const marks = getMarks(mins);
+    const scores = distributeScores(marks);
+
+    console.log(
+      `✅ [${total}] ⏱️ ${mins.toFixed(1)} min → 📊 ${marks}/20 → [${scores}]`
+    );
+
+    // Find rubric button groups
+    const allBtns = Array.from(
+      document.querySelectorAll("button")
+    );
+
+    const groups = [];
+    let grp = [];
+
+    for (const btn of allBtns) {
+      const t = btn.textContent.trim();
+
+      if (["0", "1", "2", "3", "4"].includes(t)) {
+        grp.push(btn);
+
+        if (grp.length === 5) {
+          groups.push([...grp]);
+          grp = [];
+        }
+      } else {
+        grp = [];
+      }
+    }
+
+    // Apply scores
+    for (let i = 0; i < groups.length; i++) {
+      if (groups[i][scores[i]]) {
+        groups[i][scores[i]].click();
+      }
+
+      await sleep(500);
+    }
+
+    // Save and move to next
+    await clickSave();
+
+    count++;
+
+    return !last;
+  }
+
+  console.log("🚀 Aurora Auto Evaluation Started");
+
+  console.log(
+    "📏 <10min→18 | 10–<20min→19 | ≥20min→20"
+  );
+
+  console.log(`👥 Limit: ${LIMIT} students\n`);
+
+  while (count + skipped < LIMIT) {
+    const oldUrl = window.location.href;
+
+    const hasNext = await run();
+
+    if (!hasNext) {
+      console.log(
+        "\n🏁 Last student reached. All done!"
+      );
+
+      break;
+    }
+
+    await sleep(2500);
+
+    // Check if page changed
+    if (window.location.href === oldUrl) {
+      console.log(
+        "\n🏁 No navigation detected. All done!"
+      );
+
+      break;
+    }
+
+    // Make sure we are still evaluating
+    if (!window.location.href.includes("/evaluate/")) {
+      console.log(
+        "\n🏁 Left evaluation pages. All done!"
+      );
+
+      break;
+    }
+  }
+
+  console.log("\n🎉 Finished!");
+  console.log(`✅ Evaluated : ${count}`);
+  console.log(`⏭️ Skipped   : ${skipped}`);
+  console.log(`📊 Total     : ${count + skipped}`);
+
+})();
