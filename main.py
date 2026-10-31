@@ -1,5 +1,6 @@
 
 
+import json
 import os
 import re
 from datetime import datetime, timezone
@@ -120,25 +121,101 @@ def parse_date(value):
         "%d.%m.%Y",
         "%Y-%m-%d",
         "%Y/%m/%d",
-    ]
-
-    # If the standard ones fail, fallback to US formats
-    fallback_formats = [
+        "%Y.%m.%d",
         "%m-%d-%Y",
         "%m/%d/%Y",
+        "%m.%d.%Y",
+        "%d-%b-%Y",
+        "%d/%b/%Y",
+        "%d %b %Y",
+        "%d-%B-%Y",
+        "%d %B %Y",
+        "%b %d, %Y",
+        "%b %d %Y",
+        "%B %d, %Y",
+        "%B %d %Y",
+        "%Y-%b-%d",
+        "%Y/%b/%d",
+        "%Y %b %d",
     ]
 
-    for fmt in formats + fallback_formats:
-
+    for fmt in formats:
         try:
-
             return datetime.strptime(
                 value,
                 fmt
             ).date()
-
         except ValueError:
             continue
+
+    # Fallback: intelligent token parser for any arbitrary date order
+    try:
+        month_names = {
+            "jan": 1, "january": 1,
+            "feb": 2, "february": 2,
+            "mar": 3, "march": 3,
+            "apr": 4, "april": 4,
+            "may": 5,
+            "jun": 6, "june": 6,
+            "jul": 7, "july": 7,
+            "aug": 8, "august": 8,
+            "sep": 9, "september": 9, "sept": 9,
+            "oct": 10, "october": 10,
+            "nov": 11, "november": 11,
+            "dec": 12, "december": 12,
+        }
+
+        tokens = [t for t in re.split(r"[-/.\s,]+", value) if t]
+        if len(tokens) == 3:
+            year, month, day = None, None, None
+            remaining = []
+            for t in tokens:
+                lower = t.lower()
+                if lower in month_names and month is None:
+                    month = month_names[lower]
+                else:
+                    remaining.append(t)
+
+            if month is not None and len(remaining) == 2 and all(r.isdigit() for r in remaining):
+                n1, n2 = int(remaining[0]), int(remaining[1])
+                if n1 > 31 and n2 <= 31:
+                    year, day = n1, n2
+                elif n2 > 31 and n1 <= 31:
+                    year, day = n2, n1
+                elif n1 > 1000:
+                    year, day = n1, n2
+                elif n2 > 1000:
+                    year, day = n2, n1
+                else:
+                    year = 1900 + n2 if n2 > 50 else 2000 + n2
+                    day = n1
+            elif all(t.isdigit() for t in tokens):
+                nums = [int(t) for t in tokens]
+                year_idx = next((i for i, (n, t) in enumerate(zip(nums, tokens)) if len(t) == 4 or n > 31), None)
+                if year_idx is not None:
+                    year = nums[year_idx]
+                    if year < 100:
+                        year += 2000
+                    others = [n for i, n in enumerate(nums) if i != year_idx]
+                    a, b = others[0], others[1]
+                    if a > 12 and b <= 12:
+                        day, month = a, b
+                    elif b > 12 and a <= 12:
+                        day, month = b, a
+                    elif year_idx == 0:
+                        month, day = a, b
+                    else:
+                        day, month = a, b
+                else:
+                    day, month, year = nums[0], nums[1], nums[2]
+                    if year < 100:
+                        year = 1900 + year if year > 50 else 2000 + year
+
+            if year and month and day:
+                from datetime import date as date_type
+                return date_type(year, month, day)
+    except Exception:
+        pass
 
     return None
 
@@ -161,35 +238,50 @@ def normalize_date(value):
 
 def get_google_client():
 
-    if not os.path.exists(
-        GOOGLE_CREDENTIAL_FILE
-    ):
-
-        raise RuntimeError(
-            "Google service-account file not found at: "
-            + GOOGLE_CREDENTIAL_FILE
-        )
-
     scopes = [
         "https://www.googleapis.com/auth/spreadsheets.readonly",
         "https://www.googleapis.com/auth/drive.readonly",
     ]
 
     try:
-
-        credentials = (
-            Credentials.from_service_account_file(
-                GOOGLE_CREDENTIAL_FILE,
+        # 1. Try reading from environment variable GOOGLE_SERVICE_ACCOUNT_JSON
+        env_credentials = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
+        if env_credentials:
+            service_account_info = json.loads(env_credentials)
+            credentials = Credentials.from_service_account_info(
+                service_account_info,
                 scopes=scopes,
             )
+            return gspread.authorize(credentials)
+
+        # 2. Try reading from secret file / local file
+        candidate_paths = [
+            GOOGLE_CREDENTIAL_FILE,
+            "google-service-account.json",
+            "credentials.json",
+        ]
+
+        found_path = next((p for p in candidate_paths if os.path.exists(p)), None)
+
+        if found_path:
+            credentials = Credentials.from_service_account_file(
+                found_path,
+                scopes=scopes,
+            )
+            return gspread.authorize(credentials)
+
+        raise RuntimeError(
+            "Google service-account credentials not found. "
+            "Please either add a Secret File at '/etc/secrets/google-service-account.json' "
+            "or set the 'GOOGLE_SERVICE_ACCOUNT_JSON' environment variable in your Render dashboard."
         )
 
-        return gspread.authorize(
-            credentials
+    except json.JSONDecodeError as error:
+        raise RuntimeError(
+            "Failed to parse GOOGLE_SERVICE_ACCOUNT_JSON environment variable as JSON: "
+            + str(error)
         )
-
     except Exception as error:
-
         raise RuntimeError(
             "Google authentication failed: "
             + str(error)

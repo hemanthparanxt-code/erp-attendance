@@ -3,7 +3,7 @@
     // CONFIGURATION
     // =========================================================
 
-    const API = "https://erp-plan.onrender.com";
+    const API = "https://erp-attendance-qufm.onrender.com";
 
     const SECTIONS = {
         "1": "313-AIAGAI-1D",
@@ -48,34 +48,142 @@
     const section = SECTIONS[sectionChoice.trim()];
 
     // =========================================================
+    // PARSE DATE IN ANY ORDER (DD-MM-YYYY, YYYY-MM-DD, etc.)
+    // =========================================================
+
+    function parseFlexibleDate(input) {
+        if (!input) return null;
+
+        const months = {
+            jan: 1, january: 1,
+            feb: 2, february: 2,
+            mar: 3, march: 3,
+            apr: 4, april: 4,
+            may: 5,
+            jun: 6, june: 6,
+            jul: 7, july: 7,
+            aug: 8, august: 8,
+            sep: 9, september: 9, sept: 9,
+            oct: 10, october: 10,
+            nov: 11, november: 11,
+            dec: 12, december: 12
+        };
+
+        const tokens = String(input)
+            .trim()
+            .split(/[-/.\s,]+/)
+            .filter(Boolean);
+
+        if (tokens.length !== 3) return null;
+
+        let year = null;
+        let month = null;
+        let day = null;
+
+        // Check for named month first
+        const remaining = [];
+        for (const token of tokens) {
+            const lower = token.toLowerCase();
+            if (months[lower] && month === null) {
+                month = months[lower];
+            } else {
+                remaining.push(token);
+            }
+        }
+
+        if (month !== null && remaining.length === 2) {
+            const [n1, n2] = remaining.map(Number);
+            if (isNaN(n1) || isNaN(n2)) return null;
+
+            if (n1 > 31 && n2 <= 31) {
+                year = n1;
+                day = n2;
+            } else if (n2 > 31 && n1 <= 31) {
+                year = n2;
+                day = n1;
+            } else {
+                if (n1 > 1000) { year = n1; day = n2; }
+                else if (n2 > 1000) { year = n2; day = n1; }
+                else { year = n2 < 100 ? (n2 > 50 ? 1900 + n2 : 2000 + n2) : n2; day = n1; }
+            }
+        } else if (tokens.every(t => /^\d+$/.test(t))) {
+            const nums = tokens.map(Number);
+            const yearIdx = nums.findIndex((n, i) => tokens[i].length === 4 || n > 31);
+
+            if (yearIdx !== -1) {
+                year = nums[yearIdx];
+                if (year < 100) year += 2000;
+
+                const others = nums.filter((_, i) => i !== yearIdx);
+                const [a, b] = others;
+
+                if (a > 12 && b <= 12) {
+                    day = a;
+                    month = b;
+                } else if (b > 12 && a <= 12) {
+                    day = b;
+                    month = a;
+                } else {
+                    if (yearIdx === 0) {
+                        month = a;
+                        day = b;
+                    } else {
+                        day = a;
+                        month = b;
+                    }
+                }
+            } else {
+                day = nums[0];
+                month = nums[1];
+                year = nums[2] < 100 ? (nums[2] > 50 ? 1900 + nums[2] : 2000 + nums[2]) : nums[2];
+            }
+        } else {
+            return null;
+        }
+
+        if (!year || !month || !day) return null;
+
+        const parsedDate = new Date(year, month - 1, day);
+        if (
+            parsedDate.getFullYear() !== year ||
+            parsedDate.getMonth() !== month - 1 ||
+            parsedDate.getDate() !== day
+        ) {
+            return null;
+        }
+
+        const dd = String(day).padStart(2, "0");
+        const mm = String(month).padStart(2, "0");
+        const yyyy = String(year);
+
+        return `${dd}-${mm}-${yyyy}`;
+    }
+
+    // =========================================================
     // SELECT DATE
     // =========================================================
 
-    const date = prompt(
+    const inputDate = prompt(
         "ENTER DATE\n\n" +
-        "Format: DD-MM-YYYY\n" +
-        "Example: 26-10-2026"
+        "Accepts date in any order or format:\n" +
+        "• DD-MM-YYYY (e.g. 26-10-2026)\n" +
+        "• YYYY-MM-DD (e.g. 2026-10-26)\n" +
+        "• MM-DD-YYYY (e.g. 10-26-2026)\n" +
+        "• DD/MM/YYYY, 26 Oct 2026, etc."
     );
 
-    if (!date) {
+    if (!inputDate) {
         console.log("Cancelled.");
         return;
     }
 
-    if (!/^\d{2}-\d{2}-\d{4}$/.test(date)) {
-        alert("Invalid date format. Use DD-MM-YYYY.");
-        return;
-    }
+    const date = parseFlexibleDate(inputDate);
 
-    const [day, month, year] = date.split("-").map(Number);
-    const parsedDate = new Date(year, month - 1, day);
-
-    if (
-        parsedDate.getFullYear() !== year ||
-        parsedDate.getMonth() !== month - 1 ||
-        parsedDate.getDate() !== day
-    ) {
-        alert("Invalid calendar date.");
+    if (!date) {
+        alert(
+            "Invalid date: \"" + inputDate + "\"\n\n" +
+            "Please enter a valid calendar date (e.g. 26-10-2026 or 2026-10-26)."
+        );
         return;
     }
 
